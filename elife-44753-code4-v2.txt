@@ -1,0 +1,325 @@
+% ----------------------------------------------------------------------- %
+% Estimator of Locomotion Iterations for ANimal Experiments:
+% Stimulus Response Tracker v0.07
+% ----------------------------------------------------------------------- %
+% Code written by Cez Borba, Smith lab
+% Please direct comments and questions to: cezar@ucsb.edu 
+% ----------------------------------------------------------------------- %
+% Program was set to work with an 8-bit time-lapse
+% Click run and the program will walk you through the steps
+%% clear all
+clear
+clc
+close all
+
+%% Selecting file and creating results folder
+[dataFile,dataDir] = uigetfile('*.tif','Select the TIFF file to import','MultiSelect', 'off');
+newFolder = strcat(strtok(datestr(now)), ' Results\');
+outputFolder = strcat(dataDir,newFolder);
+mkdir(outputFolder);
+targetImage = imfinfo([dataDir dataFile]);
+%% setting parameters
+
+fps = str2num(input('How many frames per second? ', 's'));  % frames per second
+startFrame = str2num(input('At what frame is the stimulus fully applied? ', 's'));   % start frame for animal tracking
+animalMinSize = str2num(input('What is the minimum size (mm) of the animal? ', 's')); % 0 is recommended
+animalMaxSize = str2num(input('What is the maximum size (mm) of the animal? ', 's')); %Recommended for Ciona 6.5 mm^2
+maxSpeed = str2num(input('What is the max speed they swim? (mm/s): ', 's'));  % Max observed speed for Ciona 6.5 mm/s
+maxReact = str2num(input('What is the max number of frames before they react? ', 's')); %About a second to be considered
+maxPause = str2num(input('What is the max number of frames of hardly any movement before considered stopped? ', 's')); %About a second
+minDist = str2num(input('What is the minimum distance to consider something moving (px)?\nRecommended: 0.7! ', 's'));
+maxPause = zeros(1,maxPause);
+maxFrame = length(targetImage);  % total frames
+totTime = maxFrame - startFrame; % total frames to be analyzed
+
+%% Preparing images
+
+iFirst = imread([dataDir dataFile],startFrame);
+ibg = double(iFirst(:,:,1));    % background image
+
+%average all images
+for currFrame = startFrame:maxFrame
+    clc
+    dispText = ['Preparing images (', num2str((currFrame-startFrame)/(maxFrame-startFrame)*100), '% complete)'];
+    disp(dispText)   % display % of the process done
+    iTemp = imread([dataDir dataFile],currFrame);   % temporary image
+    iTemp = double(iTemp(:,:,1));
+    ibg = ibg + iTemp(:,:,1);
+end
+ibg = floor(ibg/totTime);
+ibg = uint8(ibg);
+figure('units','normalized','position',[0 0 1 1]), imshow(ibg);
+title('Drag to a known distance and type in pixels into MatLab. Feel free to close this window when done.');
+lineCreate = imdistline;
+lineDistance = str2num(input('What is the distance? (px) ', 's'));
+knownDis = str2num(input('What is the actual distance? (mm) ', 's'));
+scale = lineDistance/knownDis; %pixel/mm
+maxSpeed = maxSpeed / fps * scale;
+animalMinSize = animalMinSize * (scale.^2);
+animalMaxSize = animalMaxSize * (scale.^2);
+dispText = ['The scale is set to ', num2str(scale),' pixel/mm.'];
+disp(dispText)
+figure('units','normalized','position',[0 0 1 1]), imshow(iFirst)
+hold on
+title('CALIBRATION: Draw a circle around the region of interest. Press any key to continue.')
+h = imellipse;
+pause;
+cham = getPosition(h);
+ray = min([cham(3) cham(4)]) / 2;
+centerP = [(cham(3)/2) (cham(4)/2)];
+close all;
+%% Image processing for centroids
+tic
+disp('Locating animals (0% complete)');
+% get centroids
+iTemp = imread([dataDir dataFile],startFrame);
+h = fspecial('gaussian',round(sqrt(animalMaxSize)), 0.5);  % creating a Gaussian filter
+iSub = ibg - iTemp; % background substraction
+iFiltTemp = imfilter(iSub,h,'replicate');  % applying the filter
+iFilt = imbinarize(iFiltTemp,graythresh(iFiltTemp)); % convert image to binary image by automatic thresholding
+iCrop = imcrop(iFilt,cham); % crop the image with size of ROI
+iCrop = bwareaopen(iCrop,animalMinSize); % eliminate the smaller objects than mininum size of animal
+
+L = bwlabel(iCrop,8);
+infoL = regionprops(L,'Centroid','Area'); % get the information of centroid and area for animals
+
+if (isempty(infoL) == 1)
+    disp('No animal found');
+else
+    areas0 = cat(1,infoL.Area);
+    coor0 = cat(1,infoL.Centroid);
+    closse0 = [];
+    for currCom = 1:size(coor0,1)
+        closse0 = [closse0;pdist([coor0(currCom,1) coor0(currCom,2);centerP(1,1) centerP(1,2)],'euclidean')];
+    end
+    [closse0,ORD] = sort(closse0);
+    closse0 = closse0(closse0 < ray);
+    areas0 = areas0(ORD);
+    coor0 = coor0(ORD,:);
+    areas0 = areas0(1:size(closse0));
+    coor0 = coor0(1:size(closse0),:);
+    AllAreas{1} = areas0;
+    AllCoor{1} = coor0;
+end
+for currFrame = startFrame+1:maxFrame
+    iTemp = imread([dataDir dataFile],currFrame);
+    h = fspecial('gaussian',round(sqrt(animalMaxSize)), 0.5);  % creating a Gaussian filter
+    iSub = ibg - iTemp; % background substraction
+    iFiltTemp = imfilter(iSub,h,'replicate');  % applying the filter
+    iFilt = imbinarize(iFiltTemp,graythresh(iFiltTemp)); % convert image to binary image by automatic thresholding
+    iCrop = imcrop(iFilt,cham); % crop the image with size of each chamber
+    iCrop = bwareaopen(iCrop,animalMinSize); % eliminate the smaller objects than mininum size of animal
+    
+    L = bwlabel(iCrop,8);
+    infoL = regionprops(L,'Centroid','Area'); % get the information of centroid and area for the objects
+    
+    if (isempty(infoL) == 1)
+        display('No animal found')
+    else
+        areas = cat(1,infoL.Area);
+        coor = cat(1,infoL.Centroid);
+    end
+    closse = [];
+    for currCom = 1:size(coor,1)
+        closse = [closse;pdist([coor(currCom,1) coor(currCom,2);centerP(1,1) centerP(1,2)],'euclidean')];
+    end
+    [closse,ORD] = sort(closse);
+    closse = closse(closse < ray);
+    areas = areas(ORD);
+    coor = coor(ORD,:);
+    areas = areas(1:size(closse));
+    coor = coor(1:size(closse),:);
+    AllAreas{currFrame - startFrame + 1} = areas;
+    AllCoor{currFrame - startFrame + 1} = coor;
+    clc
+    dispText = ['Locating animals (', num2str((currFrame-startFrame)/(maxFrame-startFrame) * 100), '% complete)'];
+    disp(dispText)
+end
+%% Creating tracks based on centroid locations
+
+disp('Initiating tracks...')
+ind = 1;
+AllTracks = {};
+AllReacts = {};
+for currPart = 1:size(AllAreas{1},1)
+    clc
+    dispText = ['Tracking (', num2str((currPart-1)/size(AllAreas{1},1) * 100), '% complete)'];
+    disp(dispText)
+    if (AllAreas{1}(currPart) < animalMaxSize)
+        newTrack = [AllCoor{1}(currPart,1) AllCoor{1}(currPart,2)];
+        newArea = AllAreas{1}(currPart);
+        newDist = [];
+        newReact = 0;
+        moveOn = false;
+        for currFrame = 2:size(AllAreas,2)
+            currDist = 10000000;
+            currInd = 0;
+            for nextPart = 1:size(AllAreas{currFrame},1)
+                %currdArea = AllAreas{currFrame}(nextPart)/newArea(end);
+                if (pdist([newTrack(currFrame-1,1) newTrack(currFrame-1,2);AllCoor{currFrame}(nextPart,1) AllCoor{currFrame}(nextPart,2)],'euclidean') < currDist)% && ((currdArea > .3) && (currdArea < 3.5))
+                    currDist = pdist([newTrack(currFrame-1,1) newTrack(currFrame-1,2);AllCoor{currFrame}(nextPart,1) AllCoor{currFrame}(nextPart,2)],'euclidean');
+                    currInd = nextPart;
+                end
+            end
+            if ((currDist <= maxSpeed) && (moveOn == false))
+                newTrack = [newTrack;AllCoor{currFrame}(currInd,1) AllCoor{currFrame}(currInd,2)];
+                newDist = [newDist currDist];
+                newArea = [newArea AllAreas{currFrame}(currInd)];
+            else
+                tempX = ones(1,size(AllAreas,2)-size(newTrack,1)) * newTrack(end,1);
+                tempY = ones(1,size(AllAreas,2)-size(newTrack,1)) * newTrack(end,2);
+                AllTracks{ind} = [newTrack;tempX(:) tempY(:)];
+                AllDistances{ind} = [newDist zeros([1,size(AllAreas,2)-size(newDist,1)])];
+                AllAreas2{ind} = [newArea ones([1,size(AllAreas,2)-size(newArea,1)])];
+                AllReacts{ind} = newReact;
+                ind = ind + 1;
+                moveOn = true;
+                break;
+            end
+            if ((currFrame == maxReact) && (moveOn == false))
+                testTrack = (newDist > minDist);
+                newReact = maxReact - sum(testTrack) + 1;
+                if (sum(testTrack) < 1)
+                    moveOn = true;
+                    break;
+                end
+            end
+            if ((currFrame > maxReact) && (moveOn == false))
+                testTrack = (newDist(end-maxPause+1:end) > minDist);
+                if (sum(testTrack < 1))
+                    tempX = ones(1,size(AllAreas,2)-size(newTrack,1)) * AllCoor{currFrame}(currInd,1);
+                    tempY = ones(1,size(AllAreas,2)-size(newTrack,1)) * AllCoor{currFrame}(currInd,2);
+                    AllTracks{ind} = [newTrack;tempX(:) tempY(:)];
+                    AllDistances{ind} = [newDist zeros([1,size(AllAreas,2)-size(newDist,1)])];
+                    AllAreas2{ind} = [newArea ones([1,size(AllAreas,2)-size(newArea,1)])];
+                    AllReacts{ind} = newReact;
+                    ind = ind + 1;
+                    moveOn = true;
+                    break;
+                end
+            end
+        end
+        if (moveOn == false)
+            AllTracks{ind} = newTrack;
+            AllDistances{ind} = newDist;
+            AllAreas2{ind} = newArea;
+            AllReacts{ind} = newReact;
+            ind = ind + 1;
+        end
+    end
+end
+% save tracking data
+clc
+dispText = ['Tracking is complete. ', num2str(size(AllTracks,2)), ' tracks found'];
+disp(dispText)
+%% Creating images to represent data
+
+disp('Creating images...');
+cd(outputFolder);
+for currIMG = startFrame:maxFrame
+    iTemp = imread([dataDir dataFile],currIMG);
+    iFilt = iTemp(:,:,1);
+    iTemp = imcrop(iFilt,cham);
+    AllStart = [];
+    for currTrack = 1:size(AllTracks,2)
+        AllStart = [AllStart;AllTracks{1,currTrack}(currIMG-startFrame+1,1) AllTracks{1,currTrack}(currIMG-startFrame+1,2)];
+    end
+    iTemp = insertText(iTemp,[AllStart(:,1) AllStart(:,2)],1:size(AllStart,1),'AnchorPoint','LeftBottom');
+    if (currIMG == startFrame)
+        imwrite(iTemp,'trackingLabels.tif');
+        imwrite(iTemp,'LabeledAnimals.jpg');
+    else
+        imwrite(iTemp,'trackingLabels.tif','WriteMode','append');
+    end
+    clc
+    dispText = ['Tracking is complete. ', num2str(size(AllTracks,2)), ' tracks found'];
+    disp(dispText)
+    dispText = ['Creating images (', num2str(currIMG/maxFrame*100), '% complete). Labeled Animals Image available'];
+    disp(dispText)
+end
+disp('Removing reswims');
+for currOne = 1:size(AllTracks,2)
+    swimming = (AllDistances{1,currOne} > minDist);
+    indexer = strfind(swimming,maxPause);
+    if (size(indexer,2) > 0)
+        AllDistances{1,currOne} = [AllDistances{1,currOne}(1:indexer(1)-1) zeros(1,size(AllDistances{1,currOne},2)-indexer(1))];
+        posizh = [AllTracks{1,currOne}(indexer(1),1) AllTracks{1,currOne}(indexer(1),2)];
+        AllTracks{1,currOne}(indexer(1):end,1) = posizh(1);
+        AllTracks{1,currOne}(indexer(1):end,2) = posizh(2);
+    end
+end
+cc = hsv(size(AllTracks,2));
+imgData = {};
+iTemp = imread([dataDir dataFile],startFrame);
+iFilt = iTemp(:,:,1);
+iTemp = imcrop(iFilt,cham);
+imshow(iTemp)
+hold on
+for currTrack = 1:size(AllTracks,2)
+    plot(AllTracks{1,currTrack}(:,1),AllTracks{1,currTrack}(:,2),'-','Color',cc(currTrack,:),'LineWidth',0.2);
+end
+print('-f1','-djpeg',strcat(outputFolder,'TrackingOverview.jpeg'));
+close all;
+imshow(iTemp);
+hold on
+plot(AllTracks{1,1}(:,1),AllTracks{1,1}(:,2),'-','Color',cc(1,:),'LineWidth',0.2);
+imgData{1,1} = getframe;
+imwrite(imgData{1,1}.cdata,'AnimalsPaths.tif');
+close all
+for p = 2:size(AllTracks,2)
+    imshow(iTemp);
+    hold on
+    plot(AllTracks{1,p}(:,1),AllTracks{1,p}(:,2),'-','Color',cc(p,:),'LineWidth',0.2);
+    imgData{1,p} = getframe;
+    imwrite(imgData{1,p}.cdata,'AnimalsPaths.tif','WriteMode','append');
+    close all
+    clc
+    dispText = ['Saving track path images (', num2str(p/size(AllTracks,2) * 100), '% complete)'];
+    disp(dispText)
+end
+%% Cleaning up and saving raw data
+
+disp('Creating data table...');
+AnimalsLabel = 1:size(AllStart,1);
+ReactTime = [];
+MaxSpeed = [];
+AverageSpeed = [];
+NetDistance = [];
+TotalDistance = [];
+Tortuosity = [];
+SwimmingTime = [];
+SwimShape = [];
+for currAnim = 1:size(AllStart,1)
+    ReactTime = [ReactTime AllReacts{currAnim}];
+    MaxSpeed = [MaxSpeed max(AllDistances{1,currAnim})];
+    moved = AllDistances{1,currAnim} > 0;
+    AverageSpeed = [AverageSpeed mean(AllDistances{1,currAnim}(moved))];
+    NetDistance = [NetDistance pdist([AllTracks{1,currAnim}(1,1) AllTracks{1,currAnim}(1,2);AllTracks{1,currAnim}(end,1) AllTracks{1,currAnim}(end,2)],'euclidean')];
+    TotalDistance = [TotalDistance sum(AllDistances{1,currAnim})];
+    Tortuosity = [Tortuosity (TotalDistance(end)/NetDistance(end))];
+    wasSwimming = AllDistances{1,currAnim} > 0;
+    SwimmingTime = [SwimmingTime sum(wasSwimming)];
+    if ((Tortuosity(end) < 2) && (Tortuosity(end) > 1.4))
+        SwimShape = [SwimShape,"Mixed"];
+    elseif (Tortuosity(end) <= 1.4)
+        SwimShape = [SwimShape,"Straight"];
+    else
+        SwimShape = [SwimShape,"Circular"];
+    end
+end
+ReactTime = ReactTime / fps;
+MaxSpeed = MaxSpeed * fps / scale;
+AverageSpeed = AverageSpeed * fps / scale;
+NetDistance = NetDistance / scale;
+TotalDistance = TotalDistance / scale;
+SwimmingTime = SwimmingTime / fps;
+varNames = {'Label_Number','React_Time','Max_Speed','Average_Speed','Distance_from_Start','Total_Distance_Traveled','Tortuosity','Total_Swim_Time','Swim_Shape'};
+T = table(AnimalsLabel',ReactTime',MaxSpeed',AverageSpeed',NetDistance',TotalDistance',Tortuosity',SwimmingTime',SwimShape','VariableNames',varNames);
+writetable(T,strcat(strtok(dataFile,'.'),'TrackingData.xlsx'));
+AllData = {AllAreas2 AllDistances AllTracks AllReacts};
+save (strcat(outputFolder,'RawData.mat'),'AllData')
+clc
+toc
+disp('The tracking is completed.')
+close all
+%%
