@@ -45,3 +45,8 @@ gt_file = os.path.join(home_folder, 'all cells - formatted for angela.xlsx')
 		reg_file = os.path.join(currfolder, 'All_cells.xlsx')
 	affine_name = os.path.join(currfolder, 'Affine_Matrix.mat')
 ```
+## source code 4 (matlab)
+
+`elife-44753-code4-v2.txt` is a matlab file, that processes TIFF
+files.  Where are those TIFF files?
+
